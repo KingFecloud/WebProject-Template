@@ -1,0 +1,89 @@
+
+name: Deploy main and optional preview
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      # 1. 获取正式版 main
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+
+      # 2. 检查 dev 分支是否存在
+      - name: Detect optional dev branch
+        id: detect_dev
+        shell: bash
+        run: |
+          if git ls-remote --exit-code --heads origin refs/heads/dev >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 3. 如果 dev 存在，就获取开发版
+      - name: Checkout dev
+        if: steps.detect_dev.outputs.exists == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          path: preview-source
+          persist-credentials: false
+
+      # 4. 检查正式版入口
+      - name: Validate main site
+        shell: bash
+        run: |
+          test -f site/index.html || {
+            echo "::error::Missing site/index.html on main"
+            exit 1
+          }
+
+      # 5. 如果 dev 存在，把它复制到 preview
+      - name: Add preview site
+        if: steps.detect_dev.outputs.exists == 'true'
+        shell: bash
+        run: |
+          test -f preview-source/site/index.html || {
+            echo "::error::Missing site/index.html on dev"
+            exit 1
+          }
+          mkdir -p site/preview
+          cp -a preview-source/site/. site/preview/
+
+      # 6. 配置 GitHub Pages
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      # 7. 上传整个网站
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: ./site
+
+      # 8. 部署
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
